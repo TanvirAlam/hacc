@@ -1,37 +1,54 @@
-# PHP CircleCI 2.0 configuration file
-#
-# Check https://circleci.com/docs/2.0/language-php/ for more details
-#
 version: 2
 jobs:
   build:
     docker:
-      # specify the version you desire here
-      - image: circleci/php:7.1.5-browsers
-      
-      # Specify service dependencies here if necessary
-      # CircleCI maintains a library of pre-built images
-      # documented at https://circleci.com/docs/2.0/circleci-images/
-      # - image: circleci/mysql:9.4
-
-    working_directory: ~/hacc
-
+      - image: php:7.1.5-apache
+      - image: redis:latest
+        environment:
+          TZ: "/usr/share/zoneinfo/Europe/Copenhagen"
+      - image: mariadb:latest
+        environment:
+          TZ: "/usr/share/zoneinfo/Europe/Copenhagen"
+          MYSQL_DATABASE: testing
+          MYSQL_ROOT_PASSWORD: password
+    working_directory: /var/www/html
+    environment:
+      APP_ENV: testing
+      APP_KEY: base64:+59yRQt9i+0oqhDKMG5ckfrEo6eh765R9/6QvRpeQ5E=
+      DB_USERNAME: root
+      DB_PASSWORD: password
+      DB_DATABASE: testing
+      CACHE_DRIVER: redis
+      SESSION_DRIVER: redis
+      TZ: "/usr/share/zoneinfo/Europe/Copenhagen"
     steps:
+      #- run: echo '127.0.0.1 henriknordquist.dk' | tee -a /etc/hosts
+      - run: apt-get update -qq && apt-get -yqq install git unzip zlib1g-dev
       - checkout
-
-      # Download and cache dependencies
+      - run: pecl install xdebug
+      - run: docker-php-ext-enable xdebug
+      - run: docker-php-ext-install pdo pdo_mysql zip
       - restore_cache:
-          keys:
-          - v1-dependencies-{{ checksum "composer.json" }}
-          # fallback to using the latest cache if no exact match is found
-          - v1-dependencies-
-
-      - run: composer install -n --prefer-dist
-
+          key: composer-cache-{{ checksum "composer.lock" }}
+      - run:
+          name: Install Composer
+          command: |
+            php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');" && \
+            php -r "copy('https://composer.github.io/installer.sig', 'composer-setup.sig');" && \
+            php -r "if (hash_file('SHA384', 'composer-setup.php') === trim(file_get_contents('composer-setup.sig'))) { echo 'Installer verified'; } else { echo 'Installer corrupt'; unlink('composer-setup.php'); } echo PHP_EOL;" && \
+            php composer-setup.php && \
+            php -r "unlink('composer-setup.php');"
+      - run: php composer.phar global require "hirak/prestissimo:^0.3"
+      - run: php composer.phar install
       - save_cache:
+          key: composer-cache-{{ checksum "composer.lock" }}
           paths:
-            - ./vendor
-          key: v1-dependencies-{{ checksum "composer.json" }}
-        
-      # run tests!
-      - run: phpunit
+            - vendor
+      - run:
+          name: Initialize Database
+          command: |
+            php artisan migrate:refresh
+            php artisan db:seed
+      - run: php vendor/bin/phpunit --log-junit /tmp/artifacts/phpunit/phpunit.xml --coverage-html /tmp/artifacts/coverage/
+      - store_artifacts:
+          path: /tmp/artifacts
